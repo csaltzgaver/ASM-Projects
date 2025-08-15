@@ -1,0 +1,154 @@
+;-------------------------------------------------------------------------------
+; MSP430 Assembler Code Template for use with TI Code Composer Studio
+;
+;
+;-------------------------------------------------------------------------------
+            .cdecls C,LIST,"msp430.h"       ; Include device header file
+            
+;-------------------------------------------------------------------------------
+            .def    RESET                   ; Export program entry-point to
+                                            ; make it known to linker.
+;-------------------------------------------------------------------------------
+            .text                           ; Assemble into program memory.
+            .retain                         ; Override ELF conditional linking
+                                            ; and retain current section.
+            .retainrefs                     ; And retain any sections that have
+                                            ; references to current section.
+;-------------------------------------------------------------------------------
+; 7-Segment Definitions
+;-------------------------------------------------------------------------------
+; 7 SEGMENT REFERENCE PATTERN FOR NUMBERS 0-9
+SEGMENTS	.byte	0x00C0, 0x00F9, 0x00A4, 0x00B0, 0x0099, 0x0092, 0x0083, 0x00F8, 0x0080, 0x0098 ;Initialize a label holding byte sequences for all 7segment combinations.
+; 7Segment ZERO   = 0C0h
+; 7Segment ONE    = 0F9h
+; 7Segment TWO    = 0A4h
+; 7Segment THREE  = 0B0h
+; 7Segment FOUR   = 99h
+; 7Segment FIVE   = 92h
+; 7Segment SIX    = 83hh
+; 7Segment SEVEN  = 0F8h
+; 7Segment EIGHT  = 80h
+; 7Segment NINE   = 98h
+;-------------------------------------------------------------------------------
+RESET       mov.w   #__STACK_END,SP         ; Initialize stackpointer
+StopWDT     mov.w   #WDTPW|WDTHOLD,&WDTCTL  ; Stop watchdog timer
+
+;-------------------------------------------------------------------------------
+; INIT Setup Here
+;-------------------------------------------------------------------------------
+
+
+init:
+
+;-------------------------------------------------------------------------------
+; PIN Configuration (P1 & P2)
+;-------------------------------------------------------------------------------
+			mov.b #00h, &P1OUT  ; Clear P1OUT
+			mov.b #0FFh, &P1DIR ; Set P1OUT as OUTPUT Direction.
+
+			mov.b #00h, &P2OUT  ; P2.0 (Ones Place), P2.1 (Tens Place). Used to multiplex power pins.
+			mov.b #0FFh, &P2DIR ; Set P2OUT as OUTPUT Direction.
+
+
+
+			bic.b	#LOCKLPM5, &PM5CTL0
+
+			CLR R5		;Clear initial value from R5
+			CLR R6      ;Clear initial value from R6
+			CLR R7      ;Clear initial value from R7
+			CLR R8		;Clear initial value from R8
+;-------------------------------------------------------------------------------
+; TIMERB Configuration
+;-------------------------------------------------------------------------------
+; TimerB Timer #1
+;
+			bis.w #TBCLR, &TB0CTL 				;CLK Reset settings
+			bis.w #TBSSEL__ACLK, &TB0CTL 		;ACLK Usage
+			bis.w #MC__CONTINUOUS, &TB0CTL		;Continuous Mode
+			bis.w #ID__8, &TB0CTL				;Set Div-by-8.
+			bis.w #CNTL_1, &TB0CTL				;Set counter length to 2^12
+			bis.w #TBIE, &TB0CTL				;Enable Interrupt
+			bic.w #TBIFG, &TB0CTL				;Clear Interrupt flag
+			nop
+			bis.w #GIE, SR						;Enable Maskable Interrupts
+			nop
+			; This configuration should lead to an interrupt every 1s, which is what we want for our counter.
+
+; TimberB Timer #2
+
+			bis.w #TBCLR, &TB1CTL 				;CLK Reset settings
+			bis.w #TBSSEL__ACLK, &TB1CTL 		;ACLK Usage
+			bis.w #MC__CONTINUOUS, &TB1CTL		;Continuous Mode
+			bis.w #ID__1, &TB1CTL				;Set Div-by-1.
+			bis.w #TBIDEX_4, &TB1EX0			;Set Expansion division by 5 (so total division is 5*1)=5 which will give 10s
+			bis.w #CNTL_0, &TB1CTL				;Set counter length to 2^16
+			bis.w #TBIE, &TB1CTL				;Enable Interrupt
+			bic.w #TBIFG, &TB1CTL				;Clear Interrupt flag
+			nop
+			bis.w #GIE, SR						;Enable Maskable Interrupts
+			nop
+			; This configuration should lead to an interrupt every 10s, which is what we want for our counter.
+
+main:
+        ; Code to perform display sequence for 1s display.
+ 		bic.b   #0xFF, &P1OUT       ; Clear all P1 output bits (not #0)
+		mov.b   SEGMENTS(R5), R6    ; Lookup segment pattern for ones digit
+        mov.b   R6, &P1OUT          ; Output to 7-segment
+        bis.b   #0x02, &P2OUT       ; Turn ON P2.1 (Ones Place enable)
+        bic.b   #0x02, &P2OUT       ; Turn OFF P2.1 (disable Ones Place)
+
+
+        ; Code to perform display sequence for 10s display.
+
+        bic.b   #0xFF, &P1OUT       ; Clear all P1 output bits
+        mov.b   SEGMENTS(R7), R8    ; Lookup segment pattern for tenths digit
+        mov.b   R8, &P1OUT          ; Output to 7-segment
+        bis.b   #0x01, &P2OUT       ; Turn ON P2.0 (Tenths Place enable)
+        bic.b   #0x01, &P2OUT       ; Turn OFF P2.0 (disable Tenths Place)
+
+        jmp     main ;Repeat until an interrupt occurs.
+
+
+ISR_TB0_Overflow: ; Handle interrupt for 1s
+
+			inc.w 		R5 					;Increment counter every 1s
+			cmp.w		#10, R5				;Compare to see if at 10s (for overflow)
+			jeq			SegOne_clear		;Clear if so. If not, continue.
+			bic.w		#TBIFG, &TB0CTL		;Clear interrupt flags.
+			reti							;Return (to main)
+
+ISR_TB1_Overflow: ; Handle interrupt for 10s.
+
+			inc.w 		R7					;Increment counter every 10s
+			cmp.w		#6, R7				;Compare to see if at 6 (means we hit 60s, need to restart counter per assignment)
+			jeq			SegTwo_clear		;Clear if so. If not, continue.
+			bic.w		#TBIFG, &TB1CTL		;Clear interrupt flags.
+			reti							;Return (to main)
+
+SegOne_clear: ;Function  to clear timer register for 1s (needed for overflow)
+			mov.w 		#0, R5
+			bic.w		#TBIFG, &TB0CTL
+			reti
+
+SegTwo_clear: ;Function to clear timer register for 10s (needed for overflow)
+			mov.w 		#0, R7
+			bic.w		#TBIFG, &TB1CTL
+			reti
+
+;-------------------------------------------------------------------------------
+; Stack Pointer definition
+;-------------------------------------------------------------------------------
+            .global __STACK_END
+            .sect   .stack
+
+;-------------------------------------------------------------------------------
+; Interrupt Vectors
+;-------------------------------------------------------------------------------
+            .sect   ".reset"                ; MSP430 RESET Vector
+            .short  RESET
+
+            .sect ".int42"					;TimerB #1 interrupt vector
+            .short ISR_TB0_Overflow
+
+            .sect ".int40"					;TimerB #2 interrupt vector (had to find this in the manual)
+            .short ISR_TB1_Overflow
